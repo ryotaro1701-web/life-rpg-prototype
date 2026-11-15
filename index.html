@@ -13,7 +13,7 @@ header{max-width:760px;margin:0 auto;padding:22px 2px 14px;display:flex;justify-
 </style>
 </head>
 <body>
-<header><div><h1>⚔ LIFE RPG</h1><small>日常を、少しずつ冒険に。</small></div><span class="chip">試作 v0.1.1</span></header>
+<header><div><h1>⚔ LIFE RPG</h1><small>日常を、少しずつ冒険に。</small></div><span class="chip">試作 v0.2</span></header>
 <main>
 <section id="home" class="view active">
  <div class="panel">
@@ -23,6 +23,14 @@ header{max-width:760px;margin:0 auto;padding:22px 2px 14px;display:flex;justify-
    <div class="stat mp"><div class="stat-top"><span>✨ MP</span><strong id="mpText">100</strong></div><div class="bar"><div id="mpBar" class="fill"></div></div><div class="muted">気力</div></div>
   </div>
   <div style="margin-top:16px" class="level-line"><div class="level-badge" id="overallLevel">1</div><div class="grow"><div class="section-head" style="margin-bottom:4px"><h3>総合レベル</h3><span class="muted" id="overallTotal">0 EXP</span></div><div class="progress-copy"><span id="overallProgress">次のレベルまで 200 EXP</span><span id="overallRemain">0 / 200</span></div><div class="bar"><div id="overallBar" class="fill" style="background:var(--gold)"></div></div></div></div>
+ </div>
+ <div class="panel">
+  <div class="section-head"><h2>睡眠記録</h2><span class="muted">起床時に記録</span></div>
+  <div class="form-grid">
+   <div class="field"><label for="sleepHours">睡眠時間</label><select id="sleepHours"></select></div>
+   <div class="field" style="display:flex;align-items:end"><button style="width:100%" onclick="recordSleep()">睡眠を記録</button></div>
+  </div>
+  <p class="notice" id="sleepRateNote">1時間あたり HP +10 / MP +10（設定で変更できます）</p>
  </div>
  <div class="panel"><div class="section-head"><h2>今日の冒険</h2><button class="small" onclick="openTask()">＋ タスク追加</button></div><div id="homeTasks"></div></div>
  <div class="panel"><div class="section-head"><h2>最近の記録</h2><span class="muted">直近5件</span></div><div id="recent"></div></div>
@@ -37,6 +45,15 @@ header{max-width:760px;margin:0 auto;padding:22px 2px 14px;display:flex;justify-
 </section>
 <section id="history" class="view">
  <div class="panel"><div class="section-head"><h2>冒険の記録</h2><span class="muted">新しい順</span></div><div id="historyList"></div></div>
+ <div class="panel">
+  <h2 style="margin-bottom:10px">睡眠回復の設定</h2>
+  <div class="form-grid">
+   <div class="field"><label for="hpRate">1時間あたりのHP回復量</label><input id="hpRate" type="number" min="0" max="100" step="1" value="10"></div>
+   <div class="field"><label for="mpRate">1時間あたりのMP回復量</label><input id="mpRate" type="number" min="0" max="100" step="1" value="10"></div>
+  </div>
+  <div class="dialog-actions"><button onclick="saveSleepSettings()">回復量を保存</button></div>
+  <p class="notice">初期設定はHP・MPともに1時間あたり10です。30分の睡眠ではその半分が回復します。回復量はHP・MPそれぞれ100を上限とします。</p>
+ </div>
  <div class="panel"><h2 style="margin-bottom:10px">データ管理</h2><div class="toolbar"><button class="secondary" onclick="exportData()">JSONバックアップ</button><button class="ghost" onclick="document.getElementById('importFile').click()">バックアップ復元</button><input id="importFile" type="file" accept="application/json" hidden onchange="importData(event)"></div><p class="notice">データはこのブラウザ内に保存されます。Safariの履歴・Webサイトデータ削除などで消える可能性があるため、定期的にバックアップしてください。</p></div>
 </section>
 <div class="footer-note">この試作品は端末内保存を使います。大切な記録はJSONでバックアップしてください。</div>
@@ -45,7 +62,7 @@ header{max-width:760px;margin:0 auto;padding:22px 2px 14px;display:flex;justify-
 <div id="modal" class="modal"><div class="dialog"><div class="dialog-head"><h2 id="modalTitle">編集</h2><button class="ghost small" onclick="closeModal()">閉じる</button></div><div id="modalBody"></div><div class="dialog-actions" id="modalActions"></div></div></div>
 <script>
 const DB_NAME='life-rpg-prototype', DB_VERSION=1;
-let db, state={hp:100,mp:100,overallExp:0,categories:[],tasks:[],events:[]};
+let db, state={hp:100,mp:100,overallExp:0,categories:[],tasks:[],events:[],settings:{hpPerHour:10,mpPerHour:10}};
 const $=id=>document.getElementById(id);
 function openDB(){return new Promise((resolve,reject)=>{const req=indexedDB.open(DB_NAME,DB_VERSION);req.onupgradeneeded=()=>{req.result.createObjectStore('state')};req.onsuccess=()=>resolve(req.result);req.onerror=()=>reject(req.error)})}
 function dbGet(){return new Promise((resolve,reject)=>{const tx=db.transaction('state','readonly'),r=tx.objectStore('state').get('main');r.onsuccess=()=>resolve(r.result);r.onerror=()=>reject(r.error)})}
@@ -59,21 +76,74 @@ function needExp(level,kind){return (kind==='overall'?200:100)+(level-1)*(kind==
 function calcLevel(exp,kind){let level=1,remain=Math.max(0,exp);while(remain>=needExp(level,kind)&&level<999){remain-=needExp(level,kind);level++}return {level,remain,need:needExp(level,kind)}}
 function activeCat(id){return state.categories.find(c=>c.id===id)}
 function taskEvents(){return state.events.filter(e=>e.type==='task'&&!e.undone)}
-async function addEvent(task){const cat=activeCat(task.categoryId);if(!cat)return alert('カテゴリーが見つかりません。カテゴリーを確認してください。');const e={id:uid(),type:'task',taskId:task.id,taskName:task.name,categoryId:cat.id,categoryName:cat.name,hp:Number(task.hp)||0,mp:Number(task.mp)||0,overallExp:Number(task.overallExp)||0,categoryExp:Number(task.categoryExp)||0,at:now(),undone:false};state.events.push(e);replay();await saveRender()}
-function replay(){let hp=100,mp=100,overall=0;const cats=Object.fromEntries(state.categories.map(c=>[c.id,0]));const events=[...state.events].filter(e=>!e.undone).sort((a,b)=>a.at.localeCompare(b.at));for(const e of events){if(e.type==='task'){hp=Math.max(0,Math.min(100,hp+e.hp));mp=Math.max(0,Math.min(100,mp+e.mp));overall+=e.overallExp;cats[e.categoryId]=(cats[e.categoryId]||0)+e.categoryExp}}state.hp=hp;state.mp=mp;state.overallExp=overall;state.categories.forEach(c=>c.exp=Math.max(0,cats[c.id]||0))}
+function addEvent(task){const cat=activeCat(task.categoryId);if(!cat)return alert('カテゴリーが見つかりません。カテゴリーを確認してください。');const e={id:uid(),type:'task',taskId:task.id,taskName:task.name,categoryId:cat.id,categoryName:cat.name,hp:Number(task.hp)||0,mp:Number(task.mp)||0,overallExp:Number(task.overallExp)||0,categoryExp:Number(task.categoryExp)||0,at:now(),undone:false};state.events.push(e);replay();saveRender()}
+function replay(){
+ let hp=100,mp=100,overall=0;
+ const cats=Object.fromEntries(state.categories.map(c=>[c.id,0]));
+ const events=[...state.events].filter(e=>!e.undone).sort((a,b)=>a.at.localeCompare(b.at));
+ for(const e of events){
+  if(e.type==='task'){
+   hp=Math.max(0,Math.min(100,hp+Number(e.hp||0)));
+   mp=Math.max(0,Math.min(100,mp+Number(e.mp||0)));
+   overall+=Number(e.overallExp||0);
+   cats[e.categoryId]=(cats[e.categoryId]||0)+Number(e.categoryExp||0);
+  }else if(e.type==='sleep'){
+   hp=Math.max(0,Math.min(100,hp+Number(e.hpRecovery||0)));
+   mp=Math.max(0,Math.min(100,mp+Number(e.mpRecovery||0)));
+  }
+ }
+ state.hp=hp;state.mp=mp;state.overallExp=overall;
+ state.categories.forEach(c=>c.exp=Math.max(0,cats[c.id]||0));
+}
 async function saveRender(){await dbSet();render()}
+function ensureSettings(){
+ state.settings=state.settings||{};
+ if(!Number.isFinite(Number(state.settings.hpPerHour)))state.settings.hpPerHour=10;
+ if(!Number.isFinite(Number(state.settings.mpPerHour)))state.settings.mpPerHour=10;
+}
+function initSleepHours(){
+ const select=$('sleepHours');
+ if(!select)return;
+ select.innerHTML=Array.from({length:32},(_,i)=>{const h=(i+1)*0.5;return `<option value="${h}" ${h===8?'selected':''}>${h}時間</option>`}).join('');
+}
+async function recordSleep(){
+ ensureSettings();
+ const hours=Number($('sleepHours').value);
+ if(!Number.isFinite(hours)||hours<0.5||hours>16)return alert('睡眠時間は0.5〜16時間で設定してください。');
+ const hpRecovery=hours*Number(state.settings.hpPerHour);
+ const mpRecovery=hours*Number(state.settings.mpPerHour);
+ state.events.push({id:uid(),type:'sleep',sleepHours:hours,hpRecovery,mpRecovery,at:now(),undone:false});
+ replay();await saveRender();
+ alert(`睡眠を記録しました。\\nHP +${fmt(hpRecovery)} / MP +${fmt(mpRecovery)}（上限100）`);
+}
+async function saveSleepSettings(){
+ const hp=Number($('hpRate').value),mp=Number($('mpRate').value);
+ if(!Number.isFinite(hp)||!Number.isFinite(mp)||hp<0||mp<0||hp>100||mp>100||!Number.isInteger(hp)||!Number.isInteger(mp))return alert('回復量は0〜100の整数で入力してください。');
+ state.settings={hpPerHour:hp,mpPerHour:mp};
+ await saveRender();
+ alert('睡眠回復量を保存しました。');
+}
 function categoryOptions(selected){return state.categories.filter(c=>c.active).map(c=>`<option value="${c.id}" ${c.id===selected?'selected':''}>${esc(c.name)}</option>`).join('')}
 function taskMarkup(t,home=false){const cat=activeCat(t.categoryId);return `<div class="task"><div class="task-info"><div class="task-name">${esc(t.name)}</div><div class="task-meta"><span class="chip">${esc(cat?.name||'未分類')}</span>HP ${fmt(t.hp)} / MP ${fmt(t.mp)} ・ 総合 ${fmt(t.overallExp)} EXP / カテゴリー ${fmt(t.categoryExp)} EXP</div></div><div class="task-actions">${home?`<button class="small" onclick="completeTask('${t.id}')">完了</button>`:`<button class="small" onclick="completeTask('${t.id}')">完了</button><button class="ghost small" onclick="openTask('${t.id}')">編集</button>`}</div></div>`}
 function render(){ $('hpText').textContent=fmt(state.hp);$('mpText').textContent=fmt(state.mp);$('hpBar').style.width=state.hp+'%';$('mpBar').style.width=state.mp+'%';const ol=calcLevel(state.overallExp,'overall');$('overallLevel').textContent=ol.level;$('overallTotal').textContent=fmt(state.overallExp)+' EXP';$('overallProgress').textContent=`次のレベルまで ${fmt(ol.need-ol.remain)} EXP`;$('overallRemain').textContent=`${fmt(ol.remain)} / ${fmt(ol.need)}`;$('overallBar').style.width=(ol.remain/ol.need*100)+'%';$('statusOverall').textContent='Lv.'+ol.level;$('statusExp').textContent=`累計 ${fmt(state.overallExp)} EXP ・ 次のレベルまで ${fmt(ol.need-ol.remain)} EXP`;$('statusBar').style.width=(ol.remain/ol.need*100)+'%';
 const tasks=state.tasks.filter(t=>t.active);$('homeTasks').innerHTML=tasks.length?tasks.map(t=>taskMarkup(t,true)).join(''):'<div class="empty">タスクはまだありません。＋タスク追加から登録できます。</div>';$('taskList').innerHTML=tasks.length?tasks.map(t=>taskMarkup(t,false)).join(''):'<div class="empty">タスクはまだありません。</div>';
 const cats=state.categories.filter(c=>c.active);$('categoryList').innerHTML=cats.length?cats.map(c=>`<div class="cat-row"><div class="cat-top"><div><span class="cat-name">${esc(c.name)}</span><span class="chip">Lv.${calcLevel(c.exp,'cat').level}</span><div class="muted">${fmt(c.exp)} EXP</div></div><button class="ghost small" onclick="openCategory('${c.id}')">編集</button></div></div>`).join(''):'<div class="empty">カテゴリーがありません。</div>';
 $('categoryStatus').innerHTML=cats.map(c=>{const l=calcLevel(c.exp,'cat');return `<div class="cat-row"><div class="cat-top"><strong>${esc(c.name)}</strong><span class="chip">Lv.${l.level}</span></div><div class="progress-copy"><span>${fmt(c.exp)} EXP 累計</span><span>${fmt(l.remain)} / ${fmt(l.need)} EXP</span></div><div class="bar"><div class="fill" style="width:${l.remain/l.need*100}%;background:var(--gold)"></div></div></div>`}).join('')||'<div class="empty">カテゴリーがありません。</div>';
-const ev=[...state.events].sort((a,b)=>b.at.localeCompare(a.at)).slice(0,20);$('historyList').innerHTML=ev.length?ev.map(e=>`<div class="history-item"><div><strong>${esc(e.taskName||'タスク')}</strong><div class="muted">${new Date(e.at).toLocaleString('ja-JP')} ・ ${esc(e.categoryName||'')}</div><div class="task-meta">HP ${signed(e.hp)} / MP ${signed(e.mp)} ・ 総合 +${fmt(e.overallExp)} / カテゴリー +${fmt(e.categoryExp)} EXP</div></div><div>${e.undone?'<span class="muted">取消済</span>':`<button class="ghost small" onclick="undoEvent('${e.id}')">取消</button>`}</div></div>`).join(''):'<div class="empty">まだ記録はありません。</div>';
-$('recent').innerHTML=ev.slice(0,5).map(e=>`<div class="history-item"><div><strong>${esc(e.taskName)}</strong><div class="muted">${new Date(e.at).toLocaleString('ja-JP')}</div></div><span class="${e.undone?'muted':'positive'}">${e.undone?'取消':'記録'}</span></div>`).join('')||'<div class="empty">タスクを完了すると、ここに記録されます。</div>';
+ensureSettings();
+ $('hpRate').value=state.settings.hpPerHour;$('mpRate').value=state.settings.mpPerHour;
+ $('sleepRateNote').textContent=`1時間あたり HP +${fmt(state.settings.hpPerHour)} / MP +${fmt(state.settings.mpPerHour)}（履歴タブの設定で変更できます）`;
+ const ev=[...state.events].sort((a,b)=>b.at.localeCompare(a.at)).slice(0,20);
+ $('historyList').innerHTML=ev.length?ev.map(e=>{
+  const isSleep=e.type==='sleep';
+  const title=isSleep?`${fmt(e.sleepHours)}時間の睡眠`:(e.taskName||'タスク');
+  const detail=isSleep?`HP +${fmt(e.hpRecovery)} / MP +${fmt(e.mpRecovery)} 回復`:`HP ${signed(e.hp)} / MP ${signed(e.mp)} ・ 総合 +${fmt(e.overallExp)} / カテゴリー +${fmt(e.categoryExp)} EXP`;
+  return `<div class="history-item"><div><strong>${esc(title)}</strong><div class="muted">${new Date(e.at).toLocaleString('ja-JP')} ・ ${isSleep?'睡眠記録':esc(e.categoryName||'')}</div><div class="task-meta">${detail}</div></div><div>${e.undone?'<span class="muted">取消済</span>':`<button class="ghost small" onclick="undoEvent('${e.id}')">取消</button>`}</div></div>`;
+ }).join(''):'<div class="empty">まだ記録はありません。</div>';
+$('recent').innerHTML=ev.slice(0,5).map(e=>`<div class="history-item"><div><strong>${esc(e.type==='sleep'?`${fmt(e.sleepHours)}時間の睡眠`:e.taskName||'タスク')}</strong><div class="muted">${new Date(e.at).toLocaleString('ja-JP')}</div></div><span class="${e.undone?'muted':'positive'}">${e.undone?'取消':'記録'}</span></div>`).join('')||'<div class="empty">タスクを完了すると、ここに記録されます。</div>';
 }
 function signed(n){return (n>0?'+':'')+fmt(n)}
 async function completeTask(id){const t=state.tasks.find(x=>x.id===id);if(t)addEvent(t)}
-async function undoEvent(id){const e=state.events.find(x=>x.id===id);if(!e||e.undone)return;if(!confirm('この完了記録を取り消しますか？ステータスとEXPを再計算します。'))return;e.undone=true;replay();await saveRender()}
+async function undoEvent(id){const e=state.events.find(x=>x.id===id);if(!e||e.undone)return;if(!confirm('この記録を取り消しますか？ステータスとEXPを再計算します。'))return;e.undone=true;replay();await saveRender()}
 function openModal(title,body,actions){$('modalTitle').textContent=title;$('modalBody').innerHTML=body;$('modalActions').innerHTML=actions;$('modal').classList.add('open')}
 function closeModal(){$('modal').classList.remove('open')}
 function openTask(id){const t=state.tasks.find(x=>x.id===id);if(!state.categories.some(c=>c.active)){alert('先にカテゴリーを登録してください。');return}const v=t||{name:'',categoryId:state.categories.find(c=>c.active).id,hp:0,mp:0,overallExp:10,categoryExp:10,active:true};openModal(t?'タスクを編集':'タスクを追加',`<div class="form-grid"><div class="field wide"><label>タスク名</label><input id="fName" maxlength="80" value="${esc(v.name)}" placeholder="例：洗濯物をたたむ"></div><div class="field wide"><label>カテゴリー</label><select id="fCat">${categoryOptions(v.categoryId)}</select></div><div class="field"><label>HP変動（±可）</label><input id="fHp" type="number" step="1" value="${v.hp}"></div><div class="field"><label>MP変動（±可）</label><input id="fMp" type="number" step="1" value="${v.mp}"></div><div class="field"><label>総合EXP</label><input id="fOExp" type="number" min="0" step="1" value="${v.overallExp}"></div><div class="field"><label>カテゴリーEXP</label><input id="fCExp" type="number" min="0" step="1" value="${v.categoryExp}"></div></div><p class="notice">この試作では数値は整数で設定します。過去の完了記録には、完了時点の設定値が保存されます。</p>`,`${t?'<button class="danger" onclick="archiveTask(&quot;'+t.id+'&quot;)">無効化</button>':''}<button class="secondary" onclick="closeModal()">キャンセル</button><button onclick="saveTask('${t?.id||''}')">保存</button>`)}
@@ -82,9 +152,9 @@ async function archiveTask(id){if(!confirm('このタスクを無効化します
 function openCategory(id){const c=state.categories.find(x=>x.id===id);openModal(c?'カテゴリーを編集':'カテゴリーを追加',`<div class="field"><label>カテゴリー名</label><input id="cName" maxlength="40" value="${esc(c?.name||'')}" placeholder="例：家事"></div>${c?'<p class="notice">無効化しても、過去の記録と経験値は保持されます。</p>':''}`,`${c?'<button class="danger" onclick="archiveCategory(&quot;'+c.id+'&quot;)">無効化</button>':''}<button class="secondary" onclick="closeModal()">キャンセル</button><button onclick="saveCategory('${c?.id||''}')">保存</button>`)}
 async function saveCategory(id){const name=$('cName').value.trim();if(!name)return alert('カテゴリー名を入力してください。');if(id)state.categories.find(c=>c.id===id).name=name;else state.categories.push({id:uid(),name,exp:0,active:true});closeModal();await saveRender()}
 async function archiveCategory(id){if(state.tasks.some(t=>t.active&&t.categoryId===id))return alert('このカテゴリーを使っている有効なタスクがあります。先にタスクを別カテゴリーへ変更するか、無効化してください。');if(!confirm('カテゴリーを無効化しますか？過去の記録は保持されます。'))return;state.categories.find(c=>c.id===id).active=false;closeModal();await saveRender()}
-function exportData(){const blob=new Blob([JSON.stringify({version:1,exportedAt:now(),state},null,2)],{type:'application/json'});const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download='life-rpg-backup-'+new Date().toISOString().slice(0,10)+'.json';document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),1500)}
+function exportData(){const blob=new Blob([JSON.stringify({version:1,exportedAt:now(),state},null,2)],{type:'application/json'});const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='life-rpg-backup-'+new Date().toISOString().slice(0,10)+'.json';a.click();URL.revokeObjectURL(a.href)}
 async function importData(ev){const file=ev.target.files[0];if(!file)return;try{const obj=JSON.parse(await file.text());if(!obj.state||!Array.isArray(obj.state.tasks)||!Array.isArray(obj.state.categories)||!Array.isArray(obj.state.events))throw Error('形式が違います');if(!confirm('現在のデータをバックアップしてから復元してください。現在のデータを置き換えます。続けますか？'))return;state=obj.state;replay();await saveRender();alert('復元しました。')}catch(e){alert('復元できませんでした。正しいLIFE RPGのJSONバックアップを選んでください。')}finally{ev.target.value=''}}
 document.querySelectorAll('.tabs button').forEach(b=>b.addEventListener('click',()=>{document.querySelectorAll('.tabs button').forEach(x=>x.classList.toggle('active',x===b));document.querySelectorAll('.view').forEach(x=>x.classList.toggle('active',x.id===b.dataset.view));render()}));
-(async()=>{try{db=await openDB();const saved=await dbGet();if(saved)state=saved;else{seed();await dbSet()}replay();render()}catch(e){alert('このブラウザでは端末内保存を開始できませんでした。Safariの通常モードで開き直してください。');console.error(e)}})();
+(async()=>{try{db=await openDB();const saved=await dbGet();if(saved)state=saved;else{seed();await dbSet()}state.events=Array.isArray(state.events)?state.events:[];state.tasks=Array.isArray(state.tasks)?state.tasks:[];state.categories=Array.isArray(state.categories)?state.categories:[];ensureSettings();initSleepHours();replay();await dbSet();render()}catch(e){alert('このブラウザでは端末内保存を開始できませんでした。Safariの通常モードで開き直してください。');console.error(e)}})();
 </script>
 </body></html>
